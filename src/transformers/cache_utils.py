@@ -2,6 +2,8 @@ import copy
 import importlib.metadata
 import json
 import os
+import time
+import sys
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
@@ -333,6 +335,18 @@ class StaticCacheConfig(CacheConfig):
             )
 
 
+def profile_read(func):
+    def wrapper(self, *args, **kwargs):
+        start_time = time.time_ns()
+        result = func(self, *args, **kwargs)
+        end_time = time.time_ns()
+        self.report["read_times"].append(end_time - start_time)
+        self.report["read_num"] += 1
+        if not self.report["read_size"]:
+            self.report["read_size"] = sys.getsizeof(result)
+        return result
+    return wrapper
+
 class DynamicCache(Cache):
     """
     A cache that grows dynamically as more tokens are generated. This is the default for generative models.
@@ -374,7 +388,15 @@ class DynamicCache(Cache):
             for key_states, value_states in _distributed_cache_data:
                 self.key_cache.append(key_states)
                 self.value_cache.append(value_states)
+        
+        self.report = {
+            "read_num": 0,
+            "write_num": 1,
+            "read_size": 0,
+            "read_times": []
+        }
 
+    @profile_read
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
         """
         Support for backwards-compatible `past_key_value` indexing, e.g. `past_key_value[0][0].shape[2]` to get the
