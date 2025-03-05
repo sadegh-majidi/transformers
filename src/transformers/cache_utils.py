@@ -341,9 +341,10 @@ def profile_read(func):
         result = func(self, *args, **kwargs)
         end_time = time.time_ns()
         self.report["read_times"].append(end_time - start_time)
-        self.report["read_num"] += (len(result[0]) * 2)
-        if not self.report["read_size"]:
-            self.report["read_size"] = sys.getsizeof(result)
+        shape = result[0].shape
+        self.report["read_token_num"] += ((shape[0] * shape[2]) * 2)
+        if not self.report["read_size_bytes"]:
+            self.report["read_size_bytes"] = shape[1] * shape[3] * 2 # fp16 size
         return result
     return wrapper
 
@@ -353,10 +354,11 @@ def profile_update(func):
         result = func(self, *args, **kwargs)
         end_time = time.time_ns()
         self.report["read_times"].append(end_time - start_time)
-        self.report["read_num"] += (len(result[0]) * 2)
-        self.report["write_num"] += 1
-        if not self.report["read_size"]:
-            self.report["read_size"] = sys.getsizeof(result)
+        shape = result[0].shape
+        self.report["read_token_num"] += ((shape[0] * shape[2]) * 2)
+        self.report["write_token_num"] += 1
+        if not self.report["read_size_bytes"]:
+            self.report["read_size_bytes"] = shape[1] * shape[3] * 2 # fp16 size
         return result
     return wrapper
 
@@ -403,9 +405,9 @@ class DynamicCache(Cache):
                 self.value_cache.append(value_states)
         
         self.report = {
-            "read_num": 0,
-            "write_num": 0,
-            "read_size": 0,
+            "read_token_num": 0,
+            "write_token_num": 0,
+            "read_size_bytes": 0,
             "read_times": []
         }
 
