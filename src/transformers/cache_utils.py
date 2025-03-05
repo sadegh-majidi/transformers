@@ -341,7 +341,20 @@ def profile_read(func):
         result = func(self, *args, **kwargs)
         end_time = time.time_ns()
         self.report["read_times"].append(end_time - start_time)
-        self.report["read_num"] += 1
+        self.report["read_num"] += (len(result[0]) * 2)
+        if not self.report["read_size"]:
+            self.report["read_size"] = sys.getsizeof(result)
+        return result
+    return wrapper
+
+def profile_update(func):
+    def wrapper(self, *args, **kwargs):
+        start_time = time.time_ns()
+        result = func(self, *args, **kwargs)
+        end_time = time.time_ns()
+        self.report["read_times"].append(end_time - start_time)
+        self.report["read_num"] += (len(result[0]) * 2)
+        self.report["write_num"] += 1
         if not self.report["read_size"]:
             self.report["read_size"] = sys.getsizeof(result)
         return result
@@ -391,7 +404,7 @@ class DynamicCache(Cache):
         
         self.report = {
             "read_num": 0,
-            "write_num": 1,
+            "write_num": 0,
             "read_size": 0,
             "read_times": []
         }
@@ -422,6 +435,7 @@ class DynamicCache(Cache):
         """
         return len(self.key_cache)
 
+    @profile_update
     def update(
         self,
         key_states: torch.Tensor,
