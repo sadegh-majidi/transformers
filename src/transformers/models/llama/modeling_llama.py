@@ -55,6 +55,7 @@ logger = logging.get_logger(__name__)
 
 _CHECKPOINT_FOR_DOC = "meta-llama/Llama-2-7b-hf"
 _CONFIG_FOR_DOC = "LlamaConfig"
+change_me_layers_num = 16
 
 
 class LlamaRMSNorm(nn.Module):
@@ -499,8 +500,11 @@ class LlamaModel(LlamaPreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        # self.layers = nn.ModuleList(
+        #     [LlamaDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+        # )
         self.layers = nn.ModuleList(
-            [LlamaDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [LlamaDecoderLayer(config, layer_idx) for layer_idx in range(change_me_layers_num)]
         )
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
@@ -574,7 +578,8 @@ class LlamaModel(LlamaPreTrainedModel):
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
 
-        for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+        # for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+        for decoder_layer in self.layers[:change_me_layers_num]:
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
