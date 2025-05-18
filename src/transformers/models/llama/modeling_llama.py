@@ -521,6 +521,7 @@ class LlamaModel(LlamaPreTrainedModel):
         #     [LlamaDecoderLayer(config, layer_idx) for layer_idx in range(change_me_layers_num)]
         # )
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.run_norm = True
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
 
@@ -627,7 +628,8 @@ class LlamaModel(LlamaPreTrainedModel):
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
 
-        hidden_states = self.norm(hidden_states)
+        if self.run_norm:
+            hidden_states = self.norm(hidden_states)
         # print(hidden_states[:, 2:4, 10:20])
 
         # add hidden states from the last decoder layer
