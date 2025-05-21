@@ -153,6 +153,12 @@ _init_weights = True
 _is_quantized = False
 _is_ds_init_called = False
 
+glob_change_me_H = 1024
+glob_orig_dim = -1
+glob_A = -1
+glob_A_kv = -1
+glob_vocab_size = -1
+
 
 def is_fsdp_enabled():
     return (
@@ -906,6 +912,47 @@ def _load_state_dict_into_meta_model(
 
         else:
             param = param[:]
+
+            # CHANGE ME
+            global glob_orig_dim
+            global glob_A
+            global glob_A_kv
+            global glob_vocab_size
+
+            if glob_orig_dim > 0 and glob_A > 0 and glob_A_kv >= 0 and glob_vocab_size > 0:
+                if param.ndim == 1 and param.numel() == glob_orig_dim:
+                    param = param[:glob_change_me_H]
+
+                elif param.ndim == 2:
+                    r, c = param.shape
+
+                    # embeddings & LM‑head  (vocab_size, dim)
+                    if r == glob_vocab_size and c == glob_orig_dim:
+                        param = param[:, :glob_change_me_H]
+                    
+                    if r == glob_orig_dim and c == glob_vocab_size:
+                        param = param[:glob_change_me_H, :]
+
+                    # attention / MLP projections  (dim, dim)
+                    elif r == glob_orig_dim and c == glob_orig_dim:
+                        param = param[:glob_change_me_H, :glob_change_me_H]
+
+                    elif r == int((glob_orig_dim * glob_A_kv) // glob_A) and c == glob_orig_dim:
+                        param = param[:int((glob_change_me_H * glob_A_kv) // glob_A), :glob_change_me_H]
+
+
+                    elif c == glob_orig_dim and r % glob_orig_dim == 0:
+                        k = r // glob_orig_dim
+                        param = param[:int(k * glob_change_me_H), :glob_change_me_H]
+
+
+                    elif r == glob_orig_dim and c % glob_orig_dim == 0:
+                        k = c // glob_orig_dim
+                        param = param[:glob_change_me_H, :int(k * glob_change_me_H)]
+
+            
+
+
             if param_casting_dtype is not None:
                 param = param.to(param_casting_dtype)
             if old_param is not None and old_param.is_contiguous():
@@ -1427,7 +1474,11 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
     # through all modules up to the Attention layer, can slice logits with Tensor, and have a default TP plan
     _supports_attention_backend = False
 
-    change_me_H = 2048
+    change_me_H = 1024
+    orig_dim = -1
+    vocab_size = -1
+    A = -1
+    A_kv = -1
 
     @property
     def dummy_inputs(self) -> Dict[str, torch.Tensor]:
@@ -3823,8 +3874,21 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
             model_kwargs = kwargs
 
         if isinstance(config, LlamaConfig):
+            cls.orig_dim = config.hidden_size
+            cls.A = config.num_attention_heads
+            cls.A_kv = config.num_key_value_heads
+            cls.vocab_size = config.vocab_size if config.vocab_size > 0 else 128_256
             config.hidden_size = cls.change_me_H
             config.head_dim = config.hidden_size // config.num_attention_heads
+            global glob_orig_dim
+            global glob_A
+            global glob_A_kv
+            global glob_vocab_size
+            glob_orig_dim = -cls.orig_dim
+            glob_A = cls.A
+            glob_A_kv = cls.A_kv
+            glob_vocab_size = cls.vocab_size
+            print(f"original: {cls.orig_dim} , changed to: {config.hidden_size}")
 
         pre_quantized = hasattr(config, "quantization_config")
         if pre_quantized and not AutoHfQuantizer.supports_quant_method(config.quantization_config):
@@ -4962,49 +5026,39 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
                 # CHANGE ME
                 fixed_state_dict = {k: v for k, v in state_dict.items() if k not in mismatched_names}
                 fixed_state_dict = model_to_load._fix_state_dict_keys_on_load(fixed_state_dict)
+                
+                for name, w in fixed_state_dict.items():
+                    if w.ndim == 1 and w.numel() == cls.orig_dim:
+                        w = w[:cls.change_me_H]
 
-                print(f"fixed_state_dict: {fixed_state_dict.keys()}")
+                    elif w.ndim == 2:
+                        r, c = w.shape
 
-                # model = {}
-                # for name, w in full.items():
-                #     w = w.to(device, dtype=dtype, non_blocking=True)
-
-                #     if w.ndim == 1 and w.numel() == orig_dim:
-                #         w = w[:H]
-
-                #     elif w.ndim == 2:
-                #         r, c = w.shape
-
-                #         # embeddings & LM‑head  (vocab_size, dim)
-                #         if r == vocab_size and c == orig_dim:
-                #             w = w[:, :H]
+                        # embeddings & LM‑head  (vocab_size, dim)
+                        if r == cls.vocab_size and c == cls.orig_dim:
+                            w = w[:, :cls.change_me_H]
                         
-                #         if r == orig_dim and c == vocab_size:
-                #             w = w[:H, :]
+                        if r == cls.orig_dim and c == cls.vocab_size:
+                            w = w[:cls.change_me_H, :]
 
-                #         # attention / MLP projections  (dim, dim)
-                #         elif r == orig_dim and c == orig_dim:
-                #             w = w[:H, :H]
+                        # attention / MLP projections  (dim, dim)
+                        elif r == cls.orig_dim and c == cls.orig_dim:
+                            w = w[:cls.change_me_H, :cls.change_me_H]
 
-                #         elif r == int((orig_dim * A_kv) // A) and c == orig_dim:
-                #             w = w[:int((H * A_kv) // A), :H]
-
-
-                #         elif c == orig_dim and r % orig_dim == 0:
-                #             k = r // orig_dim
-                #             w = w[:int(k * H), :H]
+                        elif r == int((cls.orig_dim * cls.A_kv) // cls.A) and c == cls.orig_dim:
+                            w = w[:int((cls.change_me_H * cls.A_kv) // cls.A), :cls.change_me_H]
 
 
-                #         elif r == orig_dim and c % orig_dim == 0:
-                #             k = c // orig_dim
-                #             w = w[:H, :int(k * H)]
+                        elif c == cls.orig_dim and r % cls.orig_dim == 0:
+                            k = r // cls.orig_dim
+                            w = w[:int(k * cls.change_me_H), :cls.change_me_H]
 
-                #         # any other matrix is left untouched
-                #     if "wq" in name:
-                #         w = w[perm_q[:H]]
-                #     elif "wk" in name:
-                #         w = w[perm_k[:H]]
-                #     model[name] = w.contiguous()
+
+                        elif r == cls.orig_dim and c % cls.orig_dim == 0:
+                            k = c // cls.orig_dim
+                            w = w[:cls.change_me_H, :int(k * cls.change_me_H)]
+
+                    fixed_state_dict[name] = w
 
                 if is_deepspeed_zero3_enabled():
                     error_msgs += _load_state_dict_into_zero3_model(
@@ -5095,6 +5149,38 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
                             model_to_load, state_dict, start_prefix
                         )
                     fixed_state_dict = model_to_load._fix_state_dict_keys_on_load(state_dict)
+                    for name, w in fixed_state_dict.items():
+                        if w.ndim == 1 and w.numel() == cls.orig_dim:
+                            w = w[:cls.change_me_H]
+
+                        elif w.ndim == 2:
+                            r, c = w.shape
+
+                            # embeddings & LM‑head  (vocab_size, dim)
+                            if r == cls.vocab_size and c == cls.orig_dim:
+                                w = w[:, :cls.change_me_H]
+                            
+                            if r == cls.orig_dim and c == cls.vocab_size:
+                                w = w[:cls.change_me_H, :]
+
+                            # attention / MLP projections  (dim, dim)
+                            elif r == cls.orig_dim and c == cls.orig_dim:
+                                w = w[:cls.change_me_H, :cls.change_me_H]
+
+                            elif r == int((cls.orig_dim * cls.A_kv) // cls.A) and c == cls.orig_dim:
+                                w = w[:int((cls.change_me_H * cls.A_kv) // cls.A), :cls.change_me_H]
+
+
+                            elif c == cls.orig_dim and r % cls.orig_dim == 0:
+                                k = r // cls.orig_dim
+                                w = w[:int(k * cls.change_me_H), :cls.change_me_H]
+
+
+                            elif r == cls.orig_dim and c % cls.orig_dim == 0:
+                                k = c // cls.orig_dim
+                                w = w[:cls.change_me_H, :int(k * cls.change_me_H)]
+
+                        fixed_state_dict[name] = w
                     if is_deepspeed_zero3_enabled():
                         error_msgs += _load_state_dict_into_zero3_model(
                             model_to_load, fixed_state_dict, start_prefix, assign_to_params_buffers
