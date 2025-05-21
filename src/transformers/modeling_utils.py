@@ -115,6 +115,7 @@ from .utils.import_utils import (
     is_torchdynamo_compiling,
 )
 from .utils.quantization_config import BitsAndBytesConfig, QuantizationMethod
+from models.llama.configuration_llama import LlamaConfig
 
 
 XLA_USE_BF16 = os.environ.get("XLA_USE_BF16", "0").upper()
@@ -1425,6 +1426,8 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
     # In practice, it means that they support attention interface functions, fully pass the kwargs
     # through all modules up to the Attention layer, can slice logits with Tensor, and have a default TP plan
     _supports_attention_backend = False
+
+    change_me_H = 2048
 
     @property
     def dummy_inputs(self) -> Dict[str, torch.Tensor]:
@@ -3819,6 +3822,10 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
 
             model_kwargs = kwargs
 
+        if isinstance(config, LlamaConfig):
+            config.hidden_size = cls.change_me_H
+            config.head_dim = config.hidden_size // config.num_attention_heads
+
         pre_quantized = hasattr(config, "quantization_config")
         if pre_quantized and not AutoHfQuantizer.supports_quant_method(config.quantization_config):
             pre_quantized = False
@@ -4952,8 +4959,52 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
                 )
                 # at this point the state dict should be on cpu, we don't need to actually read it
                 mismatched_names = [name for name, _, _ in mismatched_keys]
+                # CHANGE ME
                 fixed_state_dict = {k: v for k, v in state_dict.items() if k not in mismatched_names}
                 fixed_state_dict = model_to_load._fix_state_dict_keys_on_load(fixed_state_dict)
+
+                print(f"fixed_state_dict: {fixed_state_dict.keys()}")
+
+                # model = {}
+                # for name, w in full.items():
+                #     w = w.to(device, dtype=dtype, non_blocking=True)
+
+                #     if w.ndim == 1 and w.numel() == orig_dim:
+                #         w = w[:H]
+
+                #     elif w.ndim == 2:
+                #         r, c = w.shape
+
+                #         # embeddings & LM‑head  (vocab_size, dim)
+                #         if r == vocab_size and c == orig_dim:
+                #             w = w[:, :H]
+                        
+                #         if r == orig_dim and c == vocab_size:
+                #             w = w[:H, :]
+
+                #         # attention / MLP projections  (dim, dim)
+                #         elif r == orig_dim and c == orig_dim:
+                #             w = w[:H, :H]
+
+                #         elif r == int((orig_dim * A_kv) // A) and c == orig_dim:
+                #             w = w[:int((H * A_kv) // A), :H]
+
+
+                #         elif c == orig_dim and r % orig_dim == 0:
+                #             k = r // orig_dim
+                #             w = w[:int(k * H), :H]
+
+
+                #         elif r == orig_dim and c % orig_dim == 0:
+                #             k = c // orig_dim
+                #             w = w[:H, :int(k * H)]
+
+                #         # any other matrix is left untouched
+                #     if "wq" in name:
+                #         w = w[perm_q[:H]]
+                #     elif "wk" in name:
+                #         w = w[perm_k[:H]]
+                #     model[name] = w.contiguous()
 
                 if is_deepspeed_zero3_enabled():
                     error_msgs += _load_state_dict_into_zero3_model(
