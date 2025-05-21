@@ -153,6 +153,7 @@ _init_weights = True
 _is_quantized = False
 _is_ds_init_called = False
 
+# CHANGE ME
 glob_change_me_H = 1024
 glob_orig_dim = -1
 glob_A = -1
@@ -5022,10 +5023,11 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
                 )
                 # at this point the state dict should be on cpu, we don't need to actually read it
                 mismatched_names = [name for name, _, _ in mismatched_keys]
-                # CHANGE ME
+                
                 fixed_state_dict = {k: v for k, v in state_dict.items() if k not in mismatched_names}
                 fixed_state_dict = model_to_load._fix_state_dict_keys_on_load(fixed_state_dict)
                 
+                # CHANGE ME
                 if glob_orig_dim > 0 and glob_A > 0 and glob_A_kv >= 0 and glob_vocab_size > 0:
                     for name, w in fixed_state_dict.items():
                         if w.ndim == 1 and w.numel() == glob_orig_dim:
@@ -5150,6 +5152,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
                         )
                     fixed_state_dict = model_to_load._fix_state_dict_keys_on_load(state_dict)
 
+                    # CHANGE ME
                     if glob_orig_dim > 0 and glob_A > 0 and glob_A_kv >= 0 and glob_vocab_size > 0:
                         for name, w in fixed_state_dict.items():
                             if w.ndim == 1 and w.numel() == glob_orig_dim:
