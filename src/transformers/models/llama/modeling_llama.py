@@ -193,7 +193,7 @@ class LlamaMLP(nn.Module):
             matmuls_out["gate"] = (tuple(x.shape), (self.hidden_size, self.intermediate_size))
             matmuls_out["up"] = (tuple(x.shape), (self.hidden_size, self.intermediate_size))
             matmuls_out["down"] = ((*x.shape[:-1], self.intermediate_size), (self.intermediate_size, self.hidden_size))
-        return down_proj
+        return down_proj, matmuls_out
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -329,7 +329,7 @@ class LlamaAttention(nn.Module):
         attn_output = self.o_proj(attn_output)
         if matmuls_out is not None:
             matmuls_out["o"] = (tuple(attn_output.shape), (self.config.num_attention_heads * self.head_dim, self.config.hidden_size))
-        return attn_output, attn_weights
+        return attn_output, attn_weights, matmuls_out
 
 
 class LlamaDecoderLayer(nn.Module):
@@ -368,7 +368,7 @@ class LlamaDecoderLayer(nn.Module):
                 hidden_states = self.input_layernorm(hidden_states)
 
             # Self Attention
-            hidden_states, self_attn_weights = self.self_attn(
+            hidden_states, self_attn_weights, matmuls = self.self_attn(
                 hidden_states=hidden_states,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -387,7 +387,7 @@ class LlamaDecoderLayer(nn.Module):
             residual = hidden_states
             if self.run_norm:
                 hidden_states = self.post_attention_layernorm(hidden_states)
-            hidden_states = self.mlp(hidden_states, matmuls_out=matmuls)
+            hidden_states, matmuls = self.mlp(hidden_states, matmuls_out=matmuls)
             hidden_states = residual + hidden_states
 
         outputs = (hidden_states,)
