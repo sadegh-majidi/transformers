@@ -187,8 +187,12 @@ class LlamaMLP(nn.Module):
         self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
         self.act_fn = ACT2FN[config.hidden_act]
 
-    def forward(self, x):
+    def forward(self, x, matmuls_out=None):
         down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        if matmuls_out is not None:
+            matmuls_out["gate"] = (x.shape, (self.hidden_size, self.intermediate_size))
+            matmuls_out["up"] = (x.shape, (self.hidden_size, self.intermediate_size))
+            matmuls_out["down"] = ((*x.shape[:-1], self.intermediate_size), (self.intermediate_size, self.hidden_size))
         return down_proj
 
 
@@ -212,12 +216,15 @@ def eager_attention_forward(
     attention_mask: Optional[torch.Tensor],
     scaling: float,
     dropout: float = 0.0,
+    mat_out=None,
     **kwargs,
 ):
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    if mat_out is not None:
+        mat_out["qk"] = (query.shape, key_states.transpose(2, 3).shape)
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
@@ -225,6 +232,8 @@ def eager_attention_forward(
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
+    if mat_out is not None:
+        mat_out["sv"] = (attn_weights.shape, value_states.shape)
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, attn_weights
@@ -264,6 +273,7 @@ class LlamaAttention(nn.Module):
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        matmuls_out = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         input_shape = hidden_states.shape[:-1]
@@ -276,8 +286,14 @@ class LlamaAttention(nn.Module):
         # key_states = (hidden_states @ self.k_proj.weight[perm_k].T).view(hidden_shape).transpose(1, 2)
         # value_states = (hidden_states @ self.v_proj.weight.T).view(hidden_shape).transpose(1, 2)
         query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        if matmuls_out is not None:
+            matmuls_out["q"] = (hidden_states.shape, (self.config.hidden_size, self.config.num_attention_heads * self.head_dim))
         key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        if matmuls_out is not None:
+            matmuls_out["k"] = (hidden_states.shape, (self.config.hidden_size, self.config.num_key_value_heads * self.head_dim))
         value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        if matmuls_out is not None:
+            matmuls_out["v"] = (hidden_states.shape, (self.config.hidden_size, self.config.num_key_value_heads * self.head_dim))
 
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -305,11 +321,14 @@ class LlamaAttention(nn.Module):
             attention_mask,
             dropout=0.0 if not self.training else self.attention_dropout,
             scaling=self.scaling,
+            mat_out=matmuls_out,
             **kwargs,
         )
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
+        if matmuls_out is not None:
+            matmuls_out["o"] = (attn_output.shape, (self.config.num_attention_heads * self.head_dim, self.config.hidden_size))
         return attn_output, attn_weights
 
 
@@ -340,6 +359,8 @@ class LlamaDecoderLayer(nn.Module):
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         
+        matmuls = dict()
+        
         if self.run_attention:
             residual = hidden_states
 
@@ -356,6 +377,7 @@ class LlamaDecoderLayer(nn.Module):
                 use_cache=use_cache,
                 cache_position=cache_position,
                 position_embeddings=position_embeddings,
+                matmuls_out=matmuls,
                 **kwargs,
             )
             hidden_states = residual + hidden_states
@@ -365,14 +387,14 @@ class LlamaDecoderLayer(nn.Module):
             residual = hidden_states
             if self.run_norm:
                 hidden_states = self.post_attention_layernorm(hidden_states)
-            hidden_states = self.mlp(hidden_states)
+            hidden_states = self.mlp(hidden_states, matmuls_out=matmuls)
             hidden_states = residual + hidden_states
 
         outputs = (hidden_states,)
         if output_attentions:
             outputs += (self_attn_weights,)
 
-        return outputs
+        return outputs, matmuls
 
 
 LLAMA_START_DOCSTRING = r"""
@@ -550,6 +572,7 @@ class LlamaModel(LlamaPreTrainedModel):
         cache_position: Optional[torch.LongTensor] = None,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[Tuple, BaseModelOutputWithPast]:
+        matmuls = None
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -612,7 +635,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     position_embeddings,
                 )
             else:
-                layer_outputs = decoder_layer(
+                layer_outputs, matmuls = decoder_layer(
                     hidden_states,
                     attention_mask=causal_mask,
                     position_ids=position_ids,
@@ -643,7 +666,7 @@ class LlamaModel(LlamaPreTrainedModel):
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
-        return output if return_dict else output.to_tuple()
+        return (output if return_dict else output.to_tuple(), matmuls)
 
     def _update_causal_mask(
         self,
@@ -861,7 +884,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        outputs = self.model(
+        outputs, matmuls = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -895,7 +918,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-        )
+        ), matmuls
 
 
 @add_start_docstrings(
