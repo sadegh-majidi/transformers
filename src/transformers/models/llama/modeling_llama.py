@@ -190,8 +190,8 @@ class LlamaMLP(nn.Module):
     def forward(self, x, matmuls_out=None):
         down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         if matmuls_out is not None:
-            matmuls_out["gate"] = (x.shape, (self.hidden_size, self.intermediate_size))
-            matmuls_out["up"] = (x.shape, (self.hidden_size, self.intermediate_size))
+            matmuls_out["gate"] = (tuple(x.shape), (self.hidden_size, self.intermediate_size))
+            matmuls_out["up"] = (tuple(x.shape), (self.hidden_size, self.intermediate_size))
             matmuls_out["down"] = ((*x.shape[:-1], self.intermediate_size), (self.intermediate_size, self.hidden_size))
         return down_proj
 
@@ -224,7 +224,7 @@ def eager_attention_forward(
 
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
     if mat_out is not None:
-        mat_out["qk"] = (query.shape, key_states.transpose(2, 3).shape)
+        mat_out["qk"] = (tuple(query.shape), tuple(key_states.transpose(2, 3).shape))
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
@@ -233,7 +233,7 @@ def eager_attention_forward(
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
     if mat_out is not None:
-        mat_out["sv"] = (attn_weights.shape, value_states.shape)
+        mat_out["sv"] = (tuple(attn_weights.shape), tuple(value_states.shape))
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, attn_weights
@@ -287,13 +287,13 @@ class LlamaAttention(nn.Module):
         # value_states = (hidden_states @ self.v_proj.weight.T).view(hidden_shape).transpose(1, 2)
         query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         if matmuls_out is not None:
-            matmuls_out["q"] = (hidden_states.shape, (self.config.hidden_size, self.config.num_attention_heads * self.head_dim))
+            matmuls_out["q"] = (tuple(hidden_states.shape), (self.config.hidden_size, self.config.num_attention_heads * self.head_dim))
         key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         if matmuls_out is not None:
-            matmuls_out["k"] = (hidden_states.shape, (self.config.hidden_size, self.config.num_key_value_heads * self.head_dim))
+            matmuls_out["k"] = (tuple(hidden_states.shape), (self.config.hidden_size, self.config.num_key_value_heads * self.head_dim))
         value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         if matmuls_out is not None:
-            matmuls_out["v"] = (hidden_states.shape, (self.config.hidden_size, self.config.num_key_value_heads * self.head_dim))
+            matmuls_out["v"] = (tuple(hidden_states.shape), (self.config.hidden_size, self.config.num_key_value_heads * self.head_dim))
 
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -328,7 +328,7 @@ class LlamaAttention(nn.Module):
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
         if matmuls_out is not None:
-            matmuls_out["o"] = (attn_output.shape, (self.config.num_attention_heads * self.head_dim, self.config.hidden_size))
+            matmuls_out["o"] = (tuple(attn_output.shape), (self.config.num_attention_heads * self.head_dim, self.config.hidden_size))
         return attn_output, attn_weights
 
 
