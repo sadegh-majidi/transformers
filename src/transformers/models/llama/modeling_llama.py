@@ -22,6 +22,7 @@ from typing import Callable, List, Optional, Tuple, Union
 import torch
 import torch.utils.checkpoint
 from torch import nn
+import time
 
 from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache, StaticCache
@@ -313,6 +314,8 @@ class LlamaAttention(nn.Module):
             else:
                 attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
+        torch.cuda.synchronize()
+        start = time.time_ns()
         attn_output, attn_weights = attention_interface(
             self,
             query_states,
@@ -324,6 +327,12 @@ class LlamaAttention(nn.Module):
             mat_out=matmuls_out,
             **kwargs,
         )
+        torch.cuda.synchronize()
+        end = time.time_ns()
+
+        self.attn_time += end - start
+        with open("./attn_time.txt", "a") as f:
+            f.write(f"{query_states.shape}: {(end - start)}\n")
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
