@@ -220,22 +220,56 @@ def eager_attention_forward(
     mat_out=None,
     **kwargs,
 ):
+    torch.cuda.synchronize()
+    ckpt0 = time.time_ns()
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
+    torch.cuda.synchronize()
+    ckpt1 = time.time_ns()
+
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+
+    torch.cuda.synchronize()
+    ckpt2 = time.time_ns()
+
     if mat_out is not None:
         mat_out["qk"] = (tuple(query.shape), tuple(key_states.transpose(2, 3).shape))
+    
+    torch.cuda.synchronize()
+    ckpt3 = time.time_ns()
+
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
+    
+    torch.cuda.synchronize()
+    ckpt4 = time.time_ns()
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+
+    torch.cuda.synchronize()
+    ckpt5 = time.time_ns()
+
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
+    torch.cuda.synchronize()
+    ckpt6 = time.time_ns()
+
     attn_output = torch.matmul(attn_weights, value_states)
+
+    torch.cuda.synchronize()
+    ckpt7 = time.time_ns()
+
     if mat_out is not None:
         mat_out["sv"] = (tuple(attn_weights.shape), tuple(value_states.shape))
     attn_output = attn_output.transpose(1, 2).contiguous()
+
+    torch.cuda.synchronize()
+    ckpt8 = time.time_ns()
+
+    with open("./attn_time.txt", "a") as f:
+        f.write(f"{query.shape}: {ckpt1 - ckpt0},{ckpt2 - ckpt1},{ckpt3 - ckpt2},{ckpt4 - ckpt3},{ckpt5 - ckpt4},{ckpt6 - ckpt5},{ckpt7 - ckpt6},{ckpt8 - ckpt7},\n")
 
     return attn_output, attn_weights
 
@@ -314,8 +348,8 @@ class LlamaAttention(nn.Module):
             else:
                 attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
-        torch.cuda.synchronize()
-        start = time.time_ns()
+        # torch.cuda.synchronize()
+        # start = time.time_ns()
         attn_output, attn_weights = attention_interface(
             self,
             query_states,
@@ -327,12 +361,11 @@ class LlamaAttention(nn.Module):
             mat_out=matmuls_out,
             **kwargs,
         )
-        torch.cuda.synchronize()
-        end = time.time_ns()
+        # torch.cuda.synchronize()
+        # end = time.time_ns()
 
-        self.attn_time += end - start
-        with open("./attn_time.txt", "a") as f:
-            f.write(f"{query_states.shape}: {(end - start)}\n")
+        # with open("./attn_time.txt", "a") as f:
+        #     f.write(f"{query_states.shape}: {(end - start)}\n")
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
