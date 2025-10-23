@@ -56,7 +56,7 @@ logger = logging.get_logger(__name__)
 
 _CHECKPOINT_FOR_DOC = "meta-llama/Llama-2-7b-hf"
 _CONFIG_FOR_DOC = "LlamaConfig"
-change_me_layers_num = 16
+change_me_layers_num = 1
 
 
 class LlamaRMSNorm(nn.Module):
@@ -378,8 +378,8 @@ class LlamaDecoderLayer(nn.Module):
     def __init__(self, config: LlamaConfig, layer_idx: int):
         super().__init__()
         self.run_attention = True
-        self.run_mlp = True
-        self.run_norm = True
+        self.run_mlp = False
+        self.run_norm = False
         self.hidden_size = config.hidden_size
 
         self.self_attn = LlamaAttention(config=config, layer_idx=layer_idx)
@@ -586,7 +586,7 @@ class LlamaModel(LlamaPreTrainedModel):
         #     [LlamaDecoderLayer(config, layer_idx) for layer_idx in range(change_me_layers_num)]
         # )
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.run_norm = True
+        self.run_norm = False
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
 

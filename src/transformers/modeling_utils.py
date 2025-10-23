@@ -154,7 +154,7 @@ _is_quantized = False
 _is_ds_init_called = False
 
 # CHANGE ME
-glob_change_me_H = 1024
+glob_change_me_H = 2048
 glob_orig_dim = -1
 glob_A = -1
 glob_A_kv = -1
@@ -936,19 +936,22 @@ def _load_state_dict_into_meta_model(
 
                     # attention / MLP projections  (dim, dim)
                     elif r == glob_orig_dim and c == glob_orig_dim:
-                        param = param[:glob_change_me_H, :glob_change_me_H]
+                        if 'o_proj' not in fixed_param_name:
+                            param = param[:(glob_change_me_H // glob_A) * glob_A, :glob_change_me_H]
+                        else:
+                            param = param[:glob_change_me_H, :(glob_change_me_H // glob_A) * glob_A]
 
-                    elif r == int((glob_orig_dim * glob_A_kv) // glob_A) and c == glob_orig_dim:
-                        param = param[:int((glob_change_me_H * glob_A_kv) // glob_A), :glob_change_me_H]
+                    elif r == int((glob_orig_dim // glob_A) * glob_A_kv) and c == glob_orig_dim:
+                        param = param[:int((glob_change_me_H // glob_A) * glob_A_kv), :glob_change_me_H]
 
 
-                    elif c == glob_orig_dim and r % glob_orig_dim == 0:
-                        k = r // glob_orig_dim
+                    elif c == glob_orig_dim and (2 < r / glob_orig_dim < 5):
+                        k = r / glob_orig_dim
                         param = param[:int(k * glob_change_me_H), :glob_change_me_H]
 
 
-                    elif r == glob_orig_dim and c % glob_orig_dim == 0:
-                        k = c // glob_orig_dim
+                    elif r == glob_orig_dim and (2 < c / glob_orig_dim < 5):
+                        k = c / glob_orig_dim
                         param = param[:glob_change_me_H, :int(k * glob_change_me_H)]
 
             
@@ -3887,7 +3890,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
             glob_vocab_size = config.vocab_size if config.vocab_size > 0 else 128_256
             config.hidden_size = glob_change_me_H
             config.head_dim = config.hidden_size // config.num_attention_heads
-            k = config.intermediate_size // glob_orig_dim
+            k = config.intermediate_size / glob_orig_dim
             config.intermediate_size = int(k * glob_change_me_H)
 
         pre_quantized = hasattr(config, "quantization_config")
