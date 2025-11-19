@@ -1,6 +1,7 @@
 from typing import Optional, Tuple
 
 import torch
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -51,15 +52,16 @@ def sdpa_attention_forward(
     if torch.jit.is_tracing() and isinstance(is_causal, torch.Tensor):
         is_causal = is_causal.item()
 
-    attn_output = torch.nn.functional.scaled_dot_product_attention(
-        query,
-        key,
-        value,
-        attn_mask=causal_mask,
-        dropout_p=dropout,
-        scale=scaling,
-        is_causal=is_causal,
-    )
+    with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attn_mask=causal_mask,
+            dropout_p=dropout,
+            scale=scaling,
+            is_causal=is_causal,
+        )
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, None
