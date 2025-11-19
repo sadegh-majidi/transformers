@@ -373,8 +373,8 @@ class LlamaDecoderLayer(nn.Module):
     def __init__(self, config: LlamaConfig, layer_idx: int):
         super().__init__()
         self.run_attention = True
-        self.run_mlp = False
-        self.run_norm = False
+        self.run_mlp = True
+        self.run_norm = True
         self.hidden_size = config.hidden_size
 
         self.self_attn = LlamaAttention(config=config, layer_idx=layer_idx)
@@ -581,7 +581,7 @@ class LlamaModel(LlamaPreTrainedModel):
         #     [LlamaDecoderLayer(config, layer_idx) for layer_idx in range(change_me_layers_num)]
         # )
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.run_norm = False
+        self.run_norm = True
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
 
