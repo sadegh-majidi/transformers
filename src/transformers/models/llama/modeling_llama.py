@@ -221,56 +221,56 @@ def eager_attention_forward(
     mat_out=None,
     **kwargs,
 ):
-    torch.cuda.synchronize()
-    ckpt0 = time.time_ns()
+    # torch.cuda.synchronize()
+    # ckpt0 = time.time_ns()
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
-    torch.cuda.synchronize()
-    ckpt1 = time.time_ns()
+    # torch.cuda.synchronize()
+    # ckpt1 = time.time_ns()
 
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
 
-    torch.cuda.synchronize()
-    ckpt2 = time.time_ns()
+    # torch.cuda.synchronize()
+    # ckpt2 = time.time_ns()
 
     if mat_out is not None:
         mat_out["qk"] = (tuple(query.shape), tuple(key_states.transpose(2, 3).shape))
     
-    torch.cuda.synchronize()
-    ckpt3 = time.time_ns()
+    # torch.cuda.synchronize()
+    # ckpt3 = time.time_ns()
 
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
     
-    torch.cuda.synchronize()
-    ckpt4 = time.time_ns()
+    # torch.cuda.synchronize()
+    # ckpt4 = time.time_ns()
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
 
-    torch.cuda.synchronize()
-    ckpt5 = time.time_ns()
+    # torch.cuda.synchronize()
+    # ckpt5 = time.time_ns()
 
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
 
-    torch.cuda.synchronize()
-    ckpt6 = time.time_ns()
+    # torch.cuda.synchronize()
+    # ckpt6 = time.time_ns()
 
     attn_output = torch.matmul(attn_weights, value_states)
 
-    torch.cuda.synchronize()
-    ckpt7 = time.time_ns()
+    # torch.cuda.synchronize()
+    # ckpt7 = time.time_ns()
 
     if mat_out is not None:
         mat_out["sv"] = (tuple(attn_weights.shape), tuple(value_states.shape))
     attn_output = attn_output.transpose(1, 2).contiguous()
 
-    torch.cuda.synchronize()
-    ckpt8 = time.time_ns()
+    # torch.cuda.synchronize()
+    # ckpt8 = time.time_ns()
 
-    with open("./attn_time.txt", "a") as f:
-        f.write(f"{query.shape}: {ckpt1 - ckpt0},{ckpt2 - ckpt1},{ckpt3 - ckpt2},{ckpt4 - ckpt3},{ckpt5 - ckpt4},{ckpt6 - ckpt5},{ckpt7 - ckpt6},{ckpt8 - ckpt7},\n")
+    # with open("./attn_time.txt", "a") as f:
+    #     f.write(f"{query.shape}: {ckpt1 - ckpt0},{ckpt2 - ckpt1},{ckpt3 - ckpt2},{ckpt4 - ckpt3},{ckpt5 - ckpt4},{ckpt6 - ckpt5},{ckpt7 - ckpt6},{ckpt8 - ckpt7},\n")
 
     return attn_output, attn_weights
 
@@ -713,10 +713,34 @@ class LlamaModel(LlamaPreTrainedModel):
         past_key_values: Cache,
         output_attentions: bool,
     ):
-        if self.config._attn_implementation == "flash_attention_2":
+        if self.config._attn_implementation == "flash_attention_2" or self.config._attn_implementation == "flash_attention_1":
             if attention_mask is not None and (attention_mask == 0.0).any():
                 return attention_mask
-            return None
+            
+            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            using_static_cache = isinstance(past_key_values, StaticCache)
+            
+            dtype, device = input_tensor.dtype, input_tensor.device
+            sequence_length = input_tensor.shape[1]
+            if using_static_cache:
+                target_length = past_key_values.get_max_cache_shape()
+            else:
+                target_length = (
+                    attention_mask.shape[-1]
+                    if isinstance(attention_mask, torch.Tensor)
+                    else past_seen_tokens + sequence_length + 1
+                )
+            
+            causal_mask = self._prepare_2d_causal_padding_mask_with_cache_position(
+                attention_mask,
+                sequence_length=sequence_length,
+                target_length=target_length,
+                # dtype=dtype,
+                device=device,
+                cache_position=cache_position,
+                batch_size=input_tensor.shape[0],
+            )
+            return causal_mask
 
         # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
         # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
@@ -827,6 +851,63 @@ class LlamaModel(LlamaPreTrainedModel):
                 )
 
         return causal_mask
+
+    @staticmethod
+    def _prepare_2d_causal_padding_mask_with_cache_position(
+        attention_mask: Optional[torch.Tensor],
+        sequence_length: int,
+        target_length: int,
+        device: torch.device,
+        cache_position: torch.Tensor,
+        batch_size: int,
+    ) -> torch.Tensor:
+        # cache_pos = cache_position.reshape(batch_size).to(device=device)
+
+        # If attention_mask is already 4D, reduce it to 2D.
+        if attention_mask is not None and attention_mask.dim() == 4:
+            # We assume mask has shape (batch, 1, query_len, key_len).
+            # Reduce to key-dimension mask by OR'ing (or selecting) across query dim.
+            # Using [:, 0, -1, :] is similar to the original 4D function which slices the mask-length portion;
+            # but to be safer we OR across the query dimension so any valid query position keeps the key as valid.
+            # You can change this to any other reduction you need.
+            # Convert to boolean if necessary.
+            # shape -> (batch, key_len)
+            reduced = attention_mask[:, 0, :, :].any(dim=1)
+            base_mask = reduced.to(torch.bool).to(device)
+        elif attention_mask is not None and attention_mask.dim() == 2:
+            # Use the provided 2D mask as base (convert to boolean)
+            base_mask = attention_mask.to(torch.bool).to(device)
+        else:
+            # No attention mask provided: assume everything up to cache_position is valid,
+            # everything else is invalid (will be set below).
+            # Start with all False and set positions <= cache_pos True.
+            base_mask = torch.zeros((batch_size, 0), dtype=torch.bool, device=device)
+
+        # Now ensure base_mask has size target_length: pad with False (invalid) or truncate
+        mask_len = base_mask.shape[-1]
+        if mask_len >= target_length:
+            padding_mask = base_mask[:, :target_length]
+        else:
+            # pad on right with False for not-yet-filled cache slots
+            if mask_len == 0:
+                padding_mask = torch.zeros((batch_size, target_length), dtype=torch.bool, device=device)
+            else:
+                pad_amount = target_length - mask_len
+                pad = torch.zeros((batch_size, pad_amount), dtype=torch.bool, device=device)
+                padding_mask = torch.cat([base_mask, pad], dim=1)
+
+        # Now apply cache_position: positions > cache_pos are invalid (False)
+        # Build index row [0,1,2,...,target_length-1] and compare to cache_pos
+        arange = torch.arange(target_length, device=device).unsqueeze(0)  # shape (1, target_length)
+        # cache_pos is (batch_size,); compare each row
+        valid_by_cache = arange <= cache_position.unsqueeze(1)  # True where index <= cache_pos[i]
+        valid_by_cache = valid_by_cache.to(torch.bool)
+
+        # Combine base padding mask (if any) with cache validity
+        padding_mask = padding_mask & valid_by_cache
+
+        return padding_mask
+
 
 
 class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...

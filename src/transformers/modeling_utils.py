@@ -51,7 +51,7 @@ from .dynamic_module_utils import custom_object_save
 from .generation import CompileConfig, GenerationConfig, GenerationMixin
 from .integrations import PeftAdapterMixin, deepspeed_config, is_deepspeed_zero3_enabled
 from .integrations.deepspeed import _load_state_dict_into_zero3_model
-from .integrations.flash_attention import flash_attention_forward
+from .integrations.flash_attention import flash_attention_forward, flash_attention_1_forward
 from .integrations.flex_attention import flex_attention_forward
 from .integrations.sdpa_attention import sdpa_attention_forward
 from .loss.loss_utils import LOSS_MAPPING
@@ -3892,6 +3892,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
             config.head_dim = config.hidden_size // config.num_attention_heads
             k = config.intermediate_size / glob_orig_dim
             config.intermediate_size = int(k * glob_change_me_H)
+            config._attn_implementation = 'flash_attention_1'
 
         pre_quantized = hasattr(config, "quantization_config")
         if pre_quantized and not AutoHfQuantizer.supports_quant_method(config.quantization_config):
@@ -6082,6 +6083,7 @@ ALL_ATTENTION_FUNCTIONS: Dict[str, Dict[str, Callable]] = {}
 ALL_ATTENTION_FUNCTIONS.update(
     {
         "flash_attention_2": flash_attention_forward,
+        "flash_attention_1": flash_attention_1_forward,
         "flex_attention": flex_attention_forward,
         "sdpa": sdpa_attention_forward,
     }
